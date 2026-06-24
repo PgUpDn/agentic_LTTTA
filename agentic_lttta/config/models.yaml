@@ -1,0 +1,14 @@
+# Per-agent Gemini model configuration for the LTTTA design team.
+#
+# Each agent/sub-agent can use a DIFFERENT Gemini model. For local offline
+# experiments, set GOOGLE_API_KEY or GEMINI_API_KEY in the environment.
+#
+# List the model names available to this key with:
+#   python -m agentic_lttta.scripts.list_models
+#
+# Examples you can try: gemini-3.5-flash, gemini-2.5-pro, gemini-2.5-flash,
+#                       gemini-2.5-flash-lite, gemini-2.0-flash
+
+lead_model: gemini-3.5-flash       # the coordinator (delegates to the specialists)
+analyst_model: gemini-3.5-flash    # rollout_analyst (characterises the benchmark)
+tuner_model: gemini-3.5-flash      # policy_tuner (searches + saves the policy)
