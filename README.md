@@ -4,9 +4,10 @@ Agentic Long-Term Test-Time Adaptation (LTTTA) baseline prototype for the
 RealPDE / NeurIPS 2026 competition Track 2.
 
 This repository contains a bounded online controller for long-horizon
-autoregressive foil-flow forecasting. The scored online loop does not call an
-LLM. The optional Google ADK agents are an offline design layer that can tune
-the controller policy before evaluation.
+autoregressive foil-flow forecasting. The default baseline policy does not call
+an LLM online. The optional Google ADK agents are an offline design layer that
+can tune the controller policy before evaluation, and the separate
+`llm_gateway` demo mode shows how an official online LLM agent would plug in.
 
 ## LLM Usage
 
@@ -17,10 +18,10 @@ to search for a better controller policy. That step can use a local
 `GOOGLE_API_KEY` or `GEMINI_API_KEY`, and writes the selected knobs to
 `agentic_lttta/config/policy.yaml`.
 
-During online evaluation, this repository does **not** call an LLM. The
+During default online evaluation, this repository does **not** call an LLM. The
 streaming evaluator loads `policy.yaml` and uses the bounded rule controller in
 `agentic_lttta/controller.py` to choose actions such as `observe`,
-`recalibrate`, `update_adapter`, or `skip_update`. This keeps the baseline
+`recalibrate`, `update_adapter`, or `skip_update`. This keeps the main baseline
 deterministic, reproducible, and free of participant-owned external API keys in
 the scored loop.
 
@@ -28,6 +29,41 @@ If the official competition allows online LLM agents, those calls must be wired
 through the organizer-provided API gateway with its fixed model versions, token
 limits, timeout rules, logging, and wall-clock accounting. Direct participant
 API keys should not be used in official LTTTA evaluation.
+
+### Online LLM Agent Demo
+
+To demonstrate the official-online-LLM setting before the real gateway is
+available, run the mock organizer-gateway demo:
+
+```bash
+python -m agentic_lttta.scripts.run_online_llm_demo --n-blocks 20
+```
+
+This compares three variants:
+
+- no adaptation
+- the bounded rule controller
+- an online LLM-agent controller through `policy_llm_demo.yaml`
+
+The mock gateway is deterministic and local. It exercises the same interface the
+official gateway should use: compact state in, one bounded action out, with
+latency counted against the rollout budget and decision logs stored per block.
+
+When the organizer gateway is available, switch the demo policy to:
+
+```yaml
+mode: llm_gateway
+llm_gateway_provider: organizer_http
+llm_gateway_url: https://...
+```
+
+and set the organizer-issued gateway credential, if required:
+
+```bash
+export LTTTA_GATEWAY_TOKEN=...
+```
+
+Do not replace this with a participant-owned Gemini/OpenAI/Anthropic key.
 
 ## Baseline Status
 
@@ -101,6 +137,12 @@ Evaluate a policy YAML:
 python -m agentic_lttta.scripts.run_online \
   --policy agentic_lttta/config/policy.yaml \
   --n-blocks 60
+```
+
+Demonstrate the online LLM-agent pathway with a local mock organizer gateway:
+
+```bash
+python -m agentic_lttta.scripts.run_online_llm_demo --n-blocks 20
 ```
 
 Run offline ADK-assisted policy design:

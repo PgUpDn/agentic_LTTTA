@@ -1,10 +1,11 @@
-"""The bounded controller: a fast, transparent policy mapping a compact state to
-one bounded action. **No LLM is called online** -- this keeps the Time Score high.
+"""The bounded controller: a transparent policy mapping compact state to action.
 
 The policy is fully parameterised (thresholds, budget reserves, action toggles,
 and per-action knobs); the offline Google-ADK design team tunes these parameters.
 The ``"fixed"`` mode is used for ablations (e.g., always ``skip_update`` == the
-no-adaptation baseline).
+no-adaptation baseline). The optional ``"llm_gateway"`` mode demonstrates online
+LLM action selection through an organizer-gateway interface while preserving the
+same bounded action space.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Any, Dict
 import yaml
 
 from .actions import BOUNDED_ACTIONS
+from .llm_gateway import build_gateway
 from .state import CompactState
 
 
@@ -40,12 +42,24 @@ DEFAULT_POLICY: Dict[str, Any] = {
     "time_budget_s": 60.0,
     "max_adapt_steps": 60,
     "max_obs": 8,
+    "llm_gateway_provider": "mock",
+    "llm_gateway_max_calls": 8,
+    "llm_gateway_min_interval": 1,
+    "llm_gateway_timeout_s": 10.0,
+    "mock_llm_latency_s": 0.02,
 }
 
 
 class BoundedController:
     def __init__(self, policy: Dict[str, Any] | None = None):
         self.policy = {**DEFAULT_POLICY, **(policy or {})}
+        self.llm_calls = 0
+        self.last_decision_info: Dict[str, Any] = {}
+        self.gateway = (
+            build_gateway(self.policy)
+            if self.policy.get("mode") == "llm_gateway"
+            else None
+        )
 
     @classmethod
     def from_yaml(cls, path: str) -> "BoundedController":
@@ -59,10 +73,16 @@ class BoundedController:
 
     # --- the decision ------------------------------------------------------
     def decide(self, s: CompactState) -> str:
+        self.last_decision_info = {"controller_mode": self.policy.get("mode", "rule")}
         p = self.policy
         if p.get("mode") == "fixed":
             return p.get("fixed_action", "skip_update")
+        if p.get("mode") == "llm_gateway":
+            return self._decide_llm_gateway(s)
+        return self._decide_rule(s)
 
+    def _decide_rule(self, s: CompactState) -> str:
+        p = self.policy
         e = s.last_rel_l2
         can_obs = p["use_observe"] and s.obs_frac_left > p["obs_reserve"]
         can_adapt = (
@@ -101,6 +121,54 @@ class BoundedController:
 
         # 6) default cheap statistical correction
         return "recalibrate"
+
+    def _decide_llm_gateway(self, s: CompactState) -> str:
+        p = self.policy
+        min_interval = max(1, int(p.get("llm_gateway_min_interval", 1)))
+        max_calls = max(0, int(p.get("llm_gateway_max_calls", 0)))
+        if (
+            self.gateway is None
+            or self.llm_calls >= max_calls
+            or s.block_idx % min_interval != 0
+            or s.time_frac_left <= float(p.get("time_reserve", 0.05))
+        ):
+            action = self._decide_rule(s)
+            self.last_decision_info.update(
+                {
+                    "llm_used": False,
+                    "fallback_action": action,
+                    "fallback_reason": "gateway unavailable, interval, calls, or time budget",
+                    "llm_calls": self.llm_calls,
+                }
+            )
+            return action
+
+        try:
+            decision = self.gateway.decide(s, p, BOUNDED_ACTIONS)
+        except Exception as exc:  # noqa: BLE001 - degrade safely to the rule policy
+            action = self._decide_rule(s)
+            self.last_decision_info.update(
+                {
+                    "llm_used": False,
+                    "fallback_action": action,
+                    "fallback_reason": f"{type(exc).__name__}: {exc}",
+                    "llm_calls": self.llm_calls,
+                }
+            )
+            return action
+
+        self.llm_calls += 1
+        self.last_decision_info.update(
+            {
+                "llm_used": True,
+                "llm_calls": self.llm_calls,
+                "llm_action": decision.action,
+                "llm_rationale": decision.rationale,
+                "llm_latency_s": round(decision.latency_s, 4),
+                "llm_usage": decision.usage,
+            }
+        )
+        return decision.action
 
     def validate(self) -> None:
         bad = [a for a in [self.policy.get("fixed_action")] if a and a not in BOUNDED_ACTIONS]

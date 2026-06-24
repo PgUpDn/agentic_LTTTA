@@ -119,6 +119,9 @@ def run_streaming_eval(
         )
 
         action = controller.decide(state)
+        decision_info = dict(getattr(controller, "last_decision_info", {}) or {})
+        if decision_info.get("llm_used"):
+            budget.spend_time(float(decision_info.get("llm_latency_s", 0.0)))
         ctx = BlockContext(
             active_surrogate=active_surrogate,
             experts=experts,
@@ -145,7 +148,14 @@ def run_streaming_eval(
         steps_since_obs = 0 if action == "observe" else steps_since_obs + 1
         action_counts[action] = action_counts.get(action, 0) + 1
         if collect_logs:
-            block_logs.append({"block": k, "rel_l2": round(err, 5), **result.info})
+            block_logs.append(
+                {
+                    "block": k,
+                    "rel_l2": round(err, 5),
+                    "decision": decision_info,
+                    **result.info,
+                }
+            )
 
     wall = time.perf_counter() - wall0
 
@@ -235,7 +245,13 @@ def evaluate_policy(
         "action_counts": merged_actions,
         "memory": memory.summary(),
         "per_trajectory": [
-            {"regime": r["regime"], "metrics": r["metrics"], "actions": r["action_counts"]}
+            {
+                "regime": r["regime"],
+                "metrics": r["metrics"],
+                "actions": r["action_counts"],
+                "budget": r["budget"],
+                **({"block_logs": r["block_logs"]} if collect_logs else {}),
+            }
             for r in per_traj
         ],
     }

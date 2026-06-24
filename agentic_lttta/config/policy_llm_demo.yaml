@@ -1,0 +1,28 @@
+mode: llm_gateway
+fixed_action: skip_update
+err_low: 0.035
+err_high: 0.11
+slope_adapt: 0.02
+obs_reserve: 0.0
+adapt_reserve: 0.0
+time_reserve: 0.05
+use_memory: true
+use_observe: true
+use_adapter: true
+use_expert: false
+expert_every: 0
+adapt_steps: 9
+adapt_scope: bn
+adapt_lr: 0.001
+calib_momentum: 0.5
+sigma_z: 1.96
+time_budget_s: 60.0
+max_adapt_steps: 60
+max_obs: 17
+
+# Demo-only gateway settings. The mock gateway exercises the online LLM-agent
+# path without participant-owned keys or network access.
+llm_gateway_provider: mock
+llm_gateway_max_calls: 8
+llm_gateway_min_interval: 1
+mock_llm_latency_s: 0.02
