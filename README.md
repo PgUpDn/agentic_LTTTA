@@ -8,6 +8,27 @@ autoregressive foil-flow forecasting. The scored online loop does not call an
 LLM. The optional Google ADK agents are an offline design layer that can tune
 the controller policy before evaluation.
 
+## LLM Usage
+
+This baseline uses an **offline-design / online-execution** split.
+
+During offline development, you may optionally run the Google ADK design agents
+to search for a better controller policy. That step can use a local
+`GOOGLE_API_KEY` or `GEMINI_API_KEY`, and writes the selected knobs to
+`agentic_lttta/config/policy.yaml`.
+
+During online evaluation, this repository does **not** call an LLM. The
+streaming evaluator loads `policy.yaml` and uses the bounded rule controller in
+`agentic_lttta/controller.py` to choose actions such as `observe`,
+`recalibrate`, `update_adapter`, or `skip_update`. This keeps the baseline
+deterministic, reproducible, and free of participant-owned external API keys in
+the scored loop.
+
+If the official competition allows online LLM agents, those calls must be wired
+through the organizer-provided API gateway with its fixed model versions, token
+limits, timeout rules, logging, and wall-clock accounting. Direct participant
+API keys should not be used in official LTTTA evaluation.
+
 ## Baseline Status
 
 This code is a useful agentic-policy reference baseline, but it should be
@@ -40,6 +61,9 @@ Optional ADK policy-design tools:
 pip install -e ".[adk]"
 export GOOGLE_API_KEY=...
 ```
+
+These credentials are only for local offline policy design. They are not needed
+for `run_baseline` or `run_online`.
 
 Do not commit API keys, `.env` files, downloaded datasets, or generated result
 files.
