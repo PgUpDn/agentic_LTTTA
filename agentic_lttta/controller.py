@@ -47,6 +47,9 @@ DEFAULT_POLICY: Dict[str, Any] = {
     "llm_gateway_min_interval": 1,
     "llm_gateway_timeout_s": 10.0,
     "mock_llm_latency_s": 0.02,
+    "use_physics_advisor": False,
+    "advisor_every": 1,
+    "advisor_allowed_actions": BOUNDED_ACTIONS,
 }
 
 

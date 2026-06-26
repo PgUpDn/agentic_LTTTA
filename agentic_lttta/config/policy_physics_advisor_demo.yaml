@@ -1,0 +1,32 @@
+mode: rule
+fixed_action: skip_update
+err_low: 0.1
+err_high: 0.18
+slope_adapt: 0.03
+obs_reserve: 0.0
+adapt_reserve: 0.0
+time_reserve: 0.05
+use_memory: true
+use_observe: true
+use_adapter: true
+use_expert: false
+expert_every: 0
+adapt_steps: 2
+adapt_scope: head
+adapt_lr: 0.001
+calib_momentum: 0.5
+sigma_z: 1.96
+time_budget_s: 60.0
+max_adapt_steps: 60
+max_obs: 6
+
+# Explicit online-LLM physics advisor demo. This is off in the default policy.
+use_physics_advisor: true
+advisor_every: 1
+advisor_allowed_actions:
+  - skip_update
+  - recalibrate
+  - update_adapter
+  - observe
+  - retrieve_memory
+  - select_expert

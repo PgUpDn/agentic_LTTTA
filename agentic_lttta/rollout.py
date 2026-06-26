@@ -15,7 +15,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 
-from .actions import ACTION_REGISTRY, BlockContext
+from .actions import ACTION_REGISTRY, BOUNDED_ACTIONS, BlockContext
+from .adk_agents.online_physics_advisor import (
+    build_physics_diagnostics,
+    clean_advisor_overrides,
+)
 from .budget import BudgetGuard
 from .calibration import Calibration
 from .controller import BoundedController
@@ -40,6 +44,63 @@ def _block(data: np.ndarray, a: int, b: int) -> torch.Tensor:
     return torch.from_numpy(np.ascontiguousarray(data[a:b])).unsqueeze(0).float()
 
 
+def _allowed_advisor_actions(policy: Dict[str, Any]) -> List[str]:
+    allowed = policy.get("advisor_allowed_actions") or BOUNDED_ACTIONS
+    if isinstance(allowed, str):
+        allowed = [a.strip() for a in allowed.split(",") if a.strip()]
+    return [a for a in allowed if a in ACTION_REGISTRY]
+
+
+def _validate_advisor_decision(
+    decision: Dict[str, Any],
+    *,
+    policy: Dict[str, Any],
+    budget: BudgetGuard,
+    memory: RegimeMemory,
+    experts: Dict[str, Any],
+    regime_key: str,
+) -> tuple[Optional[str], Dict[str, Any], Dict[str, Any]]:
+    """Validate an advisor recommendation and return (action, action_policy, log)."""
+    rec = decision.get("action")
+    allowed = _allowed_advisor_actions(policy)
+    log = {
+        "advisor_action": rec,
+        "advisor_reason": decision.get("reason", ""),
+        "advisor_confidence": round(float(decision.get("confidence") or 0.0), 4),
+        "advisor_research_key": decision.get("research_key", regime_key),
+        "advisor_accepted": False,
+    }
+    if decision.get("error"):
+        log["advisor_error"] = decision["error"]
+        log["advisor_fallback_reason"] = "advisor_error"
+        return None, policy, log
+    if rec not in allowed:
+        log["advisor_fallback_reason"] = "action_not_allowed"
+        return None, policy, log
+    if rec == "observe" and not budget.can_observe():
+        log["advisor_fallback_reason"] = "observation_budget"
+        return None, policy, log
+    if rec == "retrieve_memory" and not memory.has(regime_key):
+        log["advisor_fallback_reason"] = "memory_miss"
+        return None, policy, log
+    if rec == "select_expert" and not experts:
+        log["advisor_fallback_reason"] = "no_experts"
+        return None, policy, log
+
+    overrides = clean_advisor_overrides(decision)
+    action_policy = {**policy, **overrides} if overrides else policy
+    if rec == "update_adapter" and not budget.can_adapt(
+        int(action_policy.get("adapt_steps", 1))
+    ):
+        log["advisor_fallback_reason"] = "adapt_budget"
+        return None, policy, log
+
+    log["advisor_accepted"] = True
+    if overrides:
+        log["advisor_overrides"] = overrides
+    return str(rec), action_policy, log
+
+
 def run_streaming_eval(
     active_surrogate,
     trajectory: FoilTrajectory,
@@ -52,6 +113,10 @@ def run_streaming_eval(
     memory: Optional[RegimeMemory] = None,
     composite_cfg: Optional[CompositeConfig] = None,
     collect_logs: bool = True,
+    advisor: Optional[Any] = None,
+    advisor_every: int = 1,
+    advisor_timeout_s: Optional[float] = None,
+    advisor_logs: bool = True,
 ) -> Dict[str, Any]:
     experts = experts or {}
     memory = memory if memory is not None else RegimeMemory()
@@ -83,6 +148,10 @@ def run_streaming_eval(
     prev_err = 0.0
     steps_since_adapt = 999
     steps_since_obs = 999
+    if advisor is not None and advisor_timeout_s is not None and hasattr(advisor, "timeout_s"):
+        advisor.timeout_s = advisor_timeout_s
+    if advisor is not None and hasattr(advisor, "start_episode"):
+        advisor.start_episode(trajectory.regime_key)
 
     wall0 = time.perf_counter()
     for k in range(n_blocks):
@@ -118,8 +187,38 @@ def run_streaming_eval(
             has_memory=int(memory.has(trajectory.regime_key)),
         )
 
-        action = controller.decide(state)
-        decision_info = dict(getattr(controller, "last_decision_info", {}) or {})
+        action_policy = policy
+        advisor_log: Dict[str, Any] = {}
+        action: Optional[str] = None
+        if advisor is not None and advisor_every > 0 and (k % int(advisor_every) == 0):
+            recent = getattr(advisor, "recent_actions", [])
+            diagnostics = build_physics_diagnostics(
+                state=state,
+                raw_pred=raw_pred,
+                pred_block=pred,
+                real_block=real_block,
+                n_channels=C,
+                recent_actions=recent,
+            )
+            t_advisor = time.perf_counter()
+            decision = advisor.decide(diagnostics)
+            advisor_dt = time.perf_counter() - t_advisor
+            budget.spend_time(advisor_dt)
+            action, action_policy, advisor_log = _validate_advisor_decision(
+                decision,
+                policy=policy,
+                budget=budget,
+                memory=memory,
+                experts=experts,
+                regime_key=trajectory.regime_key,
+            )
+            advisor_log["advisor_latency_s"] = round(advisor_dt, 4)
+        decision_info: Dict[str, Any] = {}
+        if action is None:
+            action = controller.decide(state)
+            decision_info = dict(getattr(controller, "last_decision_info", {}) or {})
+            if advisor_log:
+                advisor_log["advisor_fallback_action"] = action
         if decision_info.get("llm_used"):
             budget.spend_time(float(decision_info.get("llm_latency_s", 0.0)))
         ctx = BlockContext(
@@ -136,7 +235,7 @@ def run_streaming_eval(
             reynolds=trajectory.reynolds,
             aoa=trajectory.aoa,
             device=device,
-            policy=policy,
+            policy=action_policy,
             n_channels=C,
         )
         result = ACTION_REGISTRY[action](ctx)
@@ -147,15 +246,18 @@ def run_streaming_eval(
         steps_since_adapt = 0 if action == "update_adapter" else steps_since_adapt + 1
         steps_since_obs = 0 if action == "observe" else steps_since_obs + 1
         action_counts[action] = action_counts.get(action, 0) + 1
+        if advisor is not None and hasattr(advisor, "record_action"):
+            advisor.record_action(action)
         if collect_logs:
-            block_logs.append(
-                {
-                    "block": k,
-                    "rel_l2": round(err, 5),
-                    "decision": decision_info,
-                    **result.info,
-                }
-            )
+            log = {
+                "block": k,
+                "rel_l2": round(err, 5),
+                "decision": decision_info,
+                **result.info,
+            }
+            if advisor_logs and advisor_log:
+                log.update(advisor_log)
+            block_logs.append(log)
 
     wall = time.perf_counter() - wall0
 
@@ -206,6 +308,10 @@ def evaluate_policy(
     experts: Optional[Dict[str, Any]] = None,
     composite_cfg: Optional[CompositeConfig] = None,
     collect_logs: bool = False,
+    advisor: Optional[Any] = None,
+    advisor_every: int = 1,
+    advisor_timeout_s: Optional[float] = None,
+    advisor_logs: bool = True,
 ) -> Dict[str, Any]:
     """Run a policy over one or more trajectories; returns aggregate + per-traj.
 
@@ -231,6 +337,10 @@ def evaluate_policy(
             memory=memory,
             composite_cfg=composite_cfg,
             collect_logs=collect_logs,
+            advisor=advisor,
+            advisor_every=advisor_every,
+            advisor_timeout_s=advisor_timeout_s,
+            advisor_logs=advisor_logs,
         )
         per_traj.append(res)
 

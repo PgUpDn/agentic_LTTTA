@@ -12,3 +12,4 @@
 lead_model: gemini-3.5-flash       # the coordinator (delegates to the specialists)
 analyst_model: gemini-3.5-flash    # rollout_analyst (characterises the benchmark)
 tuner_model: gemini-3.5-flash      # policy_tuner (searches + saves the policy)
+physics_advisor_model: gemini-2.5-flash  # online physics-advisor demo

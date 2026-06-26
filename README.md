@@ -7,7 +7,8 @@ This repository contains a bounded online controller for long-horizon
 autoregressive foil-flow forecasting. The default baseline policy does not call
 an LLM online. The optional Google ADK agents are an offline design layer that
 can tune the controller policy before evaluation, and the separate
-`llm_gateway` demo mode shows how an official online LLM agent would plug in.
+`llm_gateway` and online physics-advisor demo modes show how an official online
+LLM agent would plug in.
 
 ## LLM Usage
 
@@ -32,7 +33,9 @@ API keys should not be used in official LTTTA evaluation.
 
 ### Online LLM Agent Demo
 
-To demonstrate the official-online-LLM setting before the real gateway is
+There are two online LLM demonstration paths.
+
+First, to demonstrate the official-online-LLM setting before the real gateway is
 available, run the mock organizer-gateway demo:
 
 ```bash
@@ -65,6 +68,22 @@ export LTTTA_GATEWAY_TOKEN=...
 
 Do not replace this with a participant-owned Gemini/OpenAI/Anthropic key.
 
+Second, to demonstrate a higher-reasoning Gemini/ADK online physics advisor, run:
+
+```bash
+python -m agentic_lttta.scripts.run_online \
+  --policy agentic_lttta/config/policy_physics_advisor_demo.yaml \
+  --use-physics-advisor \
+  --advisor-model gemini-2.5-pro \
+  --n-blocks 6
+```
+
+The physics advisor reads compact causal diagnostics from the just-revealed
+block, may use physics priors/search through ADK, and recommends one bounded
+action. Python-side validation rejects invalid, over-budget, or unavailable
+actions and falls back to the normal controller. Advisor latency is counted in
+the rollout budget.
+
 ## Baseline Status
 
 This code is a useful agentic-policy reference baseline, but it should be
@@ -78,8 +97,8 @@ treated as a prototype rather than the final official starting kit:
 - It does not include the official Codabench submission wrapper.
 - External participant API keys are not allowed in official LTTTA evaluation.
   If LLM calls are used in the competition, they must go through the organizer
-  gateway and its fixed limits. The ADK layer here is for local offline policy
-  design only.
+  gateway and its fixed limits. The ADK physics advisor is an explicit online
+  LLM experiment path, not the default baseline policy.
 
 ## Setup
 
@@ -99,7 +118,9 @@ export GOOGLE_API_KEY=...
 ```
 
 These credentials are only for local offline policy design. They are not needed
-for `run_baseline` or `run_online`.
+for `run_baseline` or default `run_online`; the explicit online physics-advisor
+demo also needs a Gemini-compatible credential until an organizer gateway is
+available.
 
 Do not commit API keys, `.env` files, downloaded datasets, or generated result
 files.
@@ -143,6 +164,16 @@ Demonstrate the online LLM-agent pathway with a local mock organizer gateway:
 
 ```bash
 python -m agentic_lttta.scripts.run_online_llm_demo --n-blocks 20
+```
+
+Demonstrate the online ADK physics-advisor pathway:
+
+```bash
+python -m agentic_lttta.scripts.run_online \
+  --policy agentic_lttta/config/policy_physics_advisor_demo.yaml \
+  --use-physics-advisor \
+  --advisor-model gemini-2.5-pro \
+  --n-blocks 6
 ```
 
 Run offline ADK-assisted policy design:

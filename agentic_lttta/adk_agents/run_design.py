@@ -3,7 +3,8 @@
 Flow:
 1. Wire the Gemini key from ``GOOGLE_API_KEY`` or ``GEMINI_API_KEY``.
 2. ``init_tools`` -> load foil data + train/cache the surrogate.
-3. Build the lead/analyst/tuner agents and run them with an ``InMemoryRunner``.
+3. Build the lead/analyst/tuner/online-advisor agents and run them with an
+   ``InMemoryRunner``.
 4. If (and only if) the agents fail to save a policy, fall back to a small
    deterministic grid search so the artifact is always produced.
 5. Print the tuned policy's metrics vs the no-adaptation baseline.
@@ -67,7 +68,7 @@ def run_agents(model: str) -> bool:
 
     from .agents import build_agents
 
-    lead, _analyst, _tuner = build_agents(model=model)
+    lead, *_agents = build_agents(model=model)
     runner = InMemoryRunner(agent=lead, app_name=APP_NAME)
     session = asyncio.run(
         runner.session_service.create_session(app_name=APP_NAME, user_id=USER_ID)

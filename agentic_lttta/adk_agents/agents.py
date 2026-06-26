@@ -1,15 +1,17 @@
 """The Google-ADK multi-agent design team.
 
-A coordinator (`lttta_design_lead`) delegates to two specialist LLM agents,
+A coordinator (`lttta_design_lead`) delegates to three specialist LLM agents,
 wrapped as tools for deterministic, synchronous delegation:
 
 * **rollout_analyst** -- characterises the benchmark, the no-adaptation baseline,
   and which actions/thresholds reduce long-horizon error (read-only probing).
 * **policy_tuner** -- searches the bounded-controller knobs to maximise the
   composite score and saves the winning policy to ``config/policy.yaml``.
+* **online_physics_advisor** -- runs a short online advisor comparison using the
+  saved policy, so the demo covers both offline tuning and online agent advice.
 
-The online controller itself uses **no LLM** -- these agents run *offline* to
-compose the fast online policy.
+The default online controller uses no LLM. The online advisor is an explicit
+experiment path and should be run only when LLM calls are allowed and budgeted.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from google.adk.agents import LlmAgent
 from google.adk.tools import AgentTool
 
 from ..llm_config import DEFAULT_MODEL, configure_env
+from .online_advisor_tools import ONLINE_ADVISOR_TOOLS
 from .tools import ANALYST_TOOLS, TUNER_TOOLS
 
 
@@ -37,7 +40,7 @@ Do NOT save anything. Keep it under ~150 words.
 
 TUNER_INSTRUCTION = """\
 You are the Policy Tuner. Your goal: maximise the 'composite' score.
-1. Try ~6-8 candidate policies with `evaluate_policy_tool`, varying err_low
+1. Try ~3-4 candidate policies with `evaluate_policy_tool`, varying err_low
    (0.04-0.12), err_high (0.14-0.30), slope_adapt, use_observe/use_adapter,
    adapt_steps (1-6), adapt_scope ('bn' | 'head' | 'bn+head') and max_obs.
 2. Track the best composite seen.
@@ -45,19 +48,36 @@ You are the Policy Tuner. Your goal: maximise the 'composite' score.
 Report the final composite and the parameters you saved. Be concise.
 """
 
+PHYSICS_ADVISOR_INSTRUCTION = """\
+You are the Online Physics Advisor evaluator for LTTTA.
+1. Call `get_online_advisor_setup_info` to confirm the current saved policy,
+   bounded action space, advisor model, and default short-horizon settings.
+2. Call `compare_online_with_without_advisor` with n_blocks=6 and advisor_every=1
+   unless the user explicitly requested different values.
+3. Report a concise comparison: metrics with/without advisor, action histograms,
+   budget summaries, and 2-4 advisor log entries showing recommended action,
+   accepted/fallback status, confidence, and reason.
+Be explicit that online LLM calls are an accuracy/physics experiment and are
+counted in runtime budgets.
+"""
+
 LEAD_INSTRUCTION = """\
-You coordinate the design of a fast, bounded LTTTA controller policy.
+You coordinate the LTTTA workflow across offline policy design and the optional
+online physics-advisor experiment.
 Step 1: call the `rollout_analyst` tool to characterise the problem and baseline.
 Step 2: call the `policy_tuner` tool to search the policy space and SAVE the best
         policy (it returns the saved metrics).
-Step 3: write a concise final report: the tuned policy parameters, its composite
-        score, and the improvement over the no-adaptation baseline.
+Step 3: call the `online_physics_advisor` tool to compare the saved policy with
+        and without the online physics advisor on a short rollout.
+Step 4: write a concise final report: the tuned policy parameters, offline
+        baseline-vs-tuned metrics, online advisor comparison metrics/action logs,
+        and all saved result paths.
 Do not invent numbers -- rely on the tool results.
 """
 
 
 def build_agents(model: str = DEFAULT_MODEL):
-    """Construct (lead, analyst, tuner). Credentials come from the environment."""
+    """Construct (lead, analyst, tuner, physics_advisor)."""
     configure_env()
 
     analyst = LlmAgent(
@@ -74,14 +94,25 @@ def build_agents(model: str = DEFAULT_MODEL):
         instruction=TUNER_INSTRUCTION,
         tools=TUNER_TOOLS,
     )
+    physics_advisor = LlmAgent(
+        name="online_physics_advisor",
+        model=model,
+        description="Compares saved policy rollouts with and without the online physics advisor.",
+        instruction=PHYSICS_ADVISOR_INSTRUCTION,
+        tools=ONLINE_ADVISOR_TOOLS,
+    )
     lead = LlmAgent(
         name="lttta_design_lead",
         model=model,
         description="Coordinates LTTTA policy design across specialist agents.",
         instruction=LEAD_INSTRUCTION,
-        tools=[AgentTool(agent=analyst), AgentTool(agent=tuner)],
+        tools=[
+            AgentTool(agent=analyst),
+            AgentTool(agent=tuner),
+            AgentTool(agent=physics_advisor),
+        ],
     )
-    return lead, analyst, tuner
+    return lead, analyst, tuner, physics_advisor
 
 
 def build_design_lead(model: str = DEFAULT_MODEL):

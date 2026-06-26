@@ -8,7 +8,7 @@ The package is intentionally framework-light: it reuses a couple of modules from
 the local RealPDEBench checkout (the ``FNO3d`` surrogate and the evaluation
 metrics) via ``sys.path`` rather than pip-installing the whole benchmark.
 
-See ``agentic_lttta/docs/`` for the problem statement and per-step manuals.
+See the repository README for setup, demo modes, and competition notes.
 """
 
 __version__ = "0.1.0"

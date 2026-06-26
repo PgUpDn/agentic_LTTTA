@@ -1,8 +1,8 @@
 """Per-agent Gemini model configuration + model listing for the ADK web apps.
 
-Lets each agent (lead / analyst / tuner) use a *different* Gemini model, selected
-in ``config/models.yaml``. For local offline experiments, provide credentials
-through ``GOOGLE_API_KEY`` or ``GEMINI_API_KEY``.
+Lets each agent (lead / analyst / tuner / physics advisor) use a *different*
+Gemini model, selected in ``config/models.yaml``. For local experiments, provide
+credentials through ``GOOGLE_API_KEY`` or ``GEMINI_API_KEY``.
 
 This module intentionally does **not** modify the existing single-model
 ``agents.py``; it provides config-driven builders used by the ADK web apps and a
@@ -20,13 +20,20 @@ from google.adk.tools import AgentTool
 
 from ..llm_config import DEFAULT_MODEL, PREFERRED_MODELS, configure_env
 from ..paths import CONFIG_DIR
-from .agents import ANALYST_INSTRUCTION, LEAD_INSTRUCTION, TUNER_INSTRUCTION
+from .agents import (
+    ANALYST_INSTRUCTION,
+    LEAD_INSTRUCTION,
+    PHYSICS_ADVISOR_INSTRUCTION,
+    TUNER_INSTRUCTION,
+)
+from .online_advisor_tools import ONLINE_ADVISOR_TOOLS
 from .tools import ANALYST_TOOLS, TUNER_TOOLS
 
 DEFAULTS = {
     "lead_model": DEFAULT_MODEL,
     "analyst_model": DEFAULT_MODEL,
     "tuner_model": DEFAULT_MODEL,
+    "physics_advisor_model": "gemini-2.5-flash",
 }
 
 
@@ -68,24 +75,44 @@ def make_tuner(model: str) -> LlmAgent:
     )
 
 
-def make_lead(model: str, analyst: LlmAgent, tuner: LlmAgent) -> LlmAgent:
+def make_physics_advisor(model: str) -> LlmAgent:
+    return LlmAgent(
+        name="online_physics_advisor",
+        model=model,
+        description="Compares saved policy rollouts with and without the online physics advisor.",
+        instruction=PHYSICS_ADVISOR_INSTRUCTION,
+        tools=ONLINE_ADVISOR_TOOLS,
+    )
+
+
+def make_lead(
+    model: str,
+    analyst: LlmAgent,
+    tuner: LlmAgent,
+    physics_advisor: LlmAgent,
+) -> LlmAgent:
     return LlmAgent(
         name="lttta_design_lead",
         model=model,
         description="Coordinates LTTTA policy design across specialist agents.",
         instruction=LEAD_INSTRUCTION,
-        tools=[AgentTool(agent=analyst), AgentTool(agent=tuner)],
+        tools=[
+            AgentTool(agent=analyst),
+            AgentTool(agent=tuner),
+            AgentTool(agent=physics_advisor),
+        ],
     )
 
 
 def build_team(cfg: Optional[dict] = None):
-    """Build (lead, analyst, tuner) with a (possibly different) model per agent."""
+    """Build (lead, analyst, tuner, physics_advisor) with per-agent models."""
     configure_env()
     cfg = cfg or load_model_config()
     analyst = make_analyst(cfg["analyst_model"])
     tuner = make_tuner(cfg["tuner_model"])
-    lead = make_lead(cfg["lead_model"], analyst, tuner)
-    return lead, analyst, tuner
+    physics_advisor = make_physics_advisor(cfg["physics_advisor_model"])
+    lead = make_lead(cfg["lead_model"], analyst, tuner, physics_advisor)
+    return lead, analyst, tuner, physics_advisor
 
 
 def list_models(key: Optional[str] = None) -> List[str]:
